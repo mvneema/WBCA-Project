@@ -1,0 +1,288 @@
+---
+title: "Study of breast cancer in Wisconsin"
+author: "Neema Madayi Veetil"
+date: "Thursday, May 7, 2015"
+output: word_document
+---
+
+This is an R Markdown document. The document explain the building of predictive model to determine whether the new study will be dealt appropriately.
+
+The Data come from a study of breast cancer in Wisconsin. There are 681 cases of potentially cancerous tumors of which 238 are actually malignant. Determining whether a tumor is really malignant is traditionally determined by an invasive surgical procedure. The purpose of this study was to determine whether a new procedure called fine needle aspiration which draws only a small sample of tissue could be effective in determining tumor status.
+
+A data frame with 681 observations on the following 10 variables.
+
+Class - 0 if malignant, 1 if benign
+Adhes - marginal adhesion
+BNucl - bare nuclei
+Chrom - bland chromatin
+Epith - epithelial cell size
+Mitos - mitoses
+NNucl - normal nucleoli
+Thick - clump thickness
+UShap - cell shape uniformity
+USize - cell size uniformity
+
+The predictor values are determined by a doctor observing the cells and rating them on a scale from 1 (normal) to 10 (most abnormal) with respect to the particular characteristic.
+
+Source: Bennett, K.,P., and Mangasarian, O.L., Neural network training via linear programming. In P. M. Pardalos, editor, Advances in Optimization and Parallel Computing, pages 56-57. Elsevier Science, 1992
+
+
+
+```{r}
+library(faraway)
+data(wbca)
+head(wbca)
+View(wbca)
+names(wbca)
+## (a) Split the data set
+v1 <- 1:nrow(wbca)
+indx <- v1 %%3
+threes <-v1[!indx]
+others <- v1[!!indx]
+#add a column of groups
+wbca[which(rownames(wbca) %in% others), 'groups'] <- "True"
+wbca[which(rownames(wbca) %in% threes), 'groups'] <- "False"
+#factor the groups
+g <- factor(wbca$groups)
+#split the dataset by factor
+splitted.data <- split(wbca, g)
+#create train and test data
+wbca.train <- splitted.data$"True"
+wbca.train <- wbca.train[,-11]
+wbca.test <- splitted.data$"False"
+wbca.test <- wbca.test[,-11]
+head(wbca.test)
+#fit a binomial regression with Class as response and the other nine variables as predictors
+fullmodel.fit <- glm(wbca.train$Class ~ .,family = binomial, data = wbca.train)
+summary(fullmodel.fit)
+```
+The following code is to check whether the fitted model is good fit.
+Test for Lack of Fit:
+```{r}
+#########################################
+#Test
+#Comments:If your Null Deviance is really small, it means that the Null Model explains the data pretty well.
+#Likewise with your Residual Deviance.
+#H0 = model fits well
+#Ha = model does not fit well
+pchisq(592.796, 453,lower=F)
+
+# H-L test of lack of fit
+hosmerlem <- function (y, yhat, g = 10) 
+{
+  cutyhat <- cut(yhat, breaks = quantile(yhat, probs = seq(0, 
+                                                           1, 1/g)), include.lowest = T)
+  obs <- xtabs(cbind(1 - y, y) ~ cutyhat)
+  expect <- xtabs(cbind(1 - yhat, yhat) ~ cutyhat)
+  chisq <- sum((obs - expect)^2/expect)
+  P <- 1 - pchisq(chisq, g - 2)
+  c("X^2" = chisq, Df = g - 2, "P(>Chi)" = P)
+}
+hosmerlem(y=wbca.train$Class, predict(fullmodel.fit, type="response"), g = 10)
+```
+Residual Diagnostics
+Automated plots of residuals and fitted values
+```{r}
+
+##################################################
+
+##Automated plots:
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  plot(fullmodel.fit, which=i)
+}
+
+
+```
+Let us now try stepwise variable selection to determine the best subsets of predictors. AIC criterion is decided.
+Code is as follows:
+```{r}
+####################################################################################
+# stepwise variable selection to determine the best subsets of predictors
+
+step.aic <- step(fullmodel.fit, k=2, direction = 'both', trace=F) 
+step.aic$anova
+# best predictors are Adhes, BNucl, Chrom, Mitos, NNucl, Thick, UShap.
+####################################################################################
+```
+The best predictor variables are:Adhes, BNucl, Chrom, Mitos, NNucl, Thick and UShap.
+After finding the best predictor, let us see if there is overdispersion or underdispersion.
+For testng dispersion, we can estimate the over dispersion parameter.
+From the code, we see that the estimate is less than 1, so it has underdispersion. 
+
+```{r}
+
+# fit the reduced model
+reducedmodel.fit <- glm(wbca.train$Class ~ Adhes+BNucl+Chrom+Mitos+NNucl+Thick+UShap, family = binomial, data = wbca.train)
+summary(reducedmodel.fit)
+anova(reducedmodel.fit,fullmodel.fit,test = 'F', dispersion=0.3587)
+
+
+##   Estimate the dispersion parameter
+est.phi <- function(glmobj) { 
+  sum( 
+    residuals(glmobj, type="pearson")^2 / df.residual(glmobj)
+  )
+}
+est.phi(fullmodel.fit)
+
+
+
+est.phi(reducedmodel.fit)
+```
+Let us now fit both the models(full and reduced model) while accounting to underdispersion
+```{r}
+# refit the full model while allowing for underdispersion
+fullmodel.fit1 <- glm(wbca.train$Class ~ ., family=quasibinomial, data=wbca.train)
+summary(fullmodel.fit1)
+# refit the subset model while allowing for underdispersion
+reducedmodel.fit1 <- glm(wbca.train$Class ~ Adhes+BNucl+Chrom+Mitos+NNucl+Thick+UShap, family=quasibinomial, data=wbca.train)
+summary(reducedmodel.fit1)
+anova(reducedmodel.fit1,fullmodel.fit1, test = 'F')
+
+```
+
+```{r}
+
+
+drop1(fullmodel.fit1, test="F")
+pchisq(0.95,25)
+### answer is reduced model because G^2 > F statistic. 2.6276>3.42E-14.
+########################################################################################
+```
+Visualize the predictive ability by plot the response variable as a function of one predictor variable and overlay the others.
+Also with Bonferroni-corrected CI intervals for the mean.
+```{r}
+
+
+par(mfrow=c(1,1))
+
+
+plot(wbca.train$Thick, reducedmodel.fit$fitted.values, ylim=c(0,1),
+     xlab="Thick",ylab="Predicted Probabilities")
+
+newwbca <- data.frame(Adhes=rep(median(wbca.train$Adhes),10),BNucl=rep(median(wbca.train$BNucl),10),Chrom=rep(median(wbca.train$Chrom),10),
+                      Mitos=rep(median(wbca.train$Mitos),10),NNucl=rep(median(wbca.train$NNucl),10),Thick=seq(from=1, to=10, length=10),
+                      UShap=rep(median(wbca.train$UShap),10))
+newwbca.predict <- predict(reducedmodel.fit, newdata=newwbca, se.fit=T, type="response")
+lines(newwbca$Thick, newwbca.predict$fit, col="red")
+
+# -------------Bonferroni-corrected CI intervals for the mean-----------
+newwbca.predictLink <- predict(reducedmodel.fit, newdata=newwbca, se.fit=T, type="link")
+L <- newwbca.predictLink$fit - qnorm(1-0.05/(2*10))*newwbca.predictLink$se
+U <- newwbca.predictLink$fit + qnorm(1-0.05/(2*10))*newwbca.predictLink$se
+lines(newwbca$Thick, 1/(1+exp(-L)), lty=2, col="blue")
+lines(newwbca$Thick, 1/(1+exp(-U)), lty=2, col="blue")
+
+legend("bottomleft", lty=c(1,2), col=c("red","blue"), c("Predicted probability", "95% CI"))
+```
+The above plot is for the same for model with underdispersion, here we can see that the predictive line is below since it is underdispersion.
+
+```{r}
+#with dispersion
+plot(wbca.train$Thick, reducedmodel.fit$fitted.values, ylim=c(0,1),
+     xlab="Thick",ylab="Predicted Probabilities")
+
+newwbca <- data.frame(Adhes=rep(median(wbca.train$Adhes),10),BNucl=rep(median(wbca.train$BNucl),10),Chrom=rep(median(wbca.train$Chrom),10),
+                      Mitos=rep(median(wbca.train$Mitos),10),NNucl=rep(median(wbca.train$NNucl),10),Thick=seq(from=1, to=10, length=10),
+                      UShap=rep(median(wbca.train$UShap),10))
+newwbca.predict <- predict(reducedmodel.fit, newdata=newwbca, se.fit=T, type="response")
+lines(newwbca$Thick, newwbca.predict$fit, col="red")
+
+# -------------Bonferroni-corrected CI intervals for the mean-----------
+newwbca.predictLink <- predict(reducedmodel.fit, newdata=newwbca, se.fit=T, type="link")
+L <- newwbca.predictLink$fit - qnorm(1-0.05/(2*10))*newwbca.predictLink$se
+U <- newwbca.predictLink$fit + qnorm(1-0.05/(2*10))*newwbca.predictLink$se
+lines(newwbca$Thick, 1/(1+exp(-L)), lty=2, col="blue")
+lines(newwbca$Thick, 1/(1+exp(-U)), lty=2, col="blue")
+
+legend("bottomleft", lty=c(1,2), col=c("red","blue"), c("Predicted probability", "95% CI"))
+
+reducedmodel.fit1 <- glm(wbca.train$Class ~ Adhes+BNucl+Chrom+Mitos+NNucl+Thick+UShap, family=quasibinomial, data=wbca.train)
+
+newwbca.predictLink1 <- predict(reducedmodel.fit1, newdata=newwbca, se.fit=T, type="link")
+L1 <- newwbca.predictLink1$fit - qnorm(1-0.05/(2*10))*newwbca.predictLink1$se
+U1 <- newwbca.predictLink1$fit + qnorm(1-0.05/(2*10))*newwbca.predictLink1$se
+lines(newwbca$Thick, 1/(1+exp(-L1)), lty=5, col="green")
+lines(newwbca$Thick, 1/(1+exp(-U1)), lty=5, col="green")
+legend("bottomleft", lty=c(1,2,5), col=c("red","blue","green"), c("Predicted probability","CI with no overdispersion", "CI with overdispersion"))
+
+```
+
+We will now visualize the predictive ability using an alternative link function:
+```{r}
+############################################################################################
+ 
+
+# -------------------------Alternative link function---------------------------
+
+plot(wbca.train$Thick, reducedmodel.fit$fitted.values, ylim=c(0,1),
+     xlab="Thick",ylab="Predicted Probabilities")
+
+newwbca <- data.frame(Adhes=rep(median(wbca.train$Adhes),10),BNucl=rep(median(wbca.train$BNucl),10),Chrom=rep(median(wbca.train$Chrom),10),
+                      Mitos=rep(median(wbca.train$Mitos),10),NNucl=rep(median(wbca.train$NNucl),10),Thick=seq(from=1, to=10, length=10),
+                      UShap=rep(median(wbca.train$UShap),10))
+
+newwbca.predict.logistic <- predict(reducedmodel.fit, newdata=newwbca, se.fit=T, type="response")
+lines(newwbca$Thick, newwbca.predict.logistic$fit, col="red")
+
+# Compare with probit link
+#fit the probit regression model
+reducedmodel.fit2 <- glm(wbca.train$Class ~ Adhes+BNucl+Chrom+Mitos+NNucl+Thick+UShap, family=binomial(link="probit"), data=wbca.train)
+
+
+newwbca.predict.probit <- predict(reducedmodel.fit2, newdata=newwbca, se.fit=T, type="response")
+lines(newwbca$Thick, newwbca.predict.probit$fit, lty = 6,col="brown")
+
+
+legend("bottomleft", lty=c(1,2,5,6), col=c("red", "blue","green","brown"), 
+       c("Predicted probability","CI with no overdispersion", "CI with overdispersion", "probit"))
+##########################################################################################
+
+```
+Let us now create a confusion matrix. The table is as folows:
+```{r}
+
+predict.tumorstatus <- predict(reducedmodel.fit, newdata=wbca.train, type="response")
+table("Pred"=predict.tumorstatus > 0.5,"Class"=wbca.train$Class)
+
+predict.tumorstatus <- predict(reducedmodel.fit, newdata=wbca.train, type="response")
+table("Pred"=predict.tumorstatus > 0.9,"Class"=wbca.train$Class)
+
+```
+Now using the package ROCR, we estimate the area under curve as well as plot the roc curve to check the predictive ability on training set and validation set.
+```{r}
+library(ROCR)
+# calculate predicted probabilities on the same training set
+scores <- predict(reducedmodel.fit, newdata=wbca.train, type="response")
+
+# compare predicted probabilities to labels, for varying probability cutoffs
+pred <- prediction(scores, labels=wbca.train$Class )
+perf <- performance(pred, "tpr", "fpr")
+
+
+# plot the ROC curve
+plot(perf, type = "l",colorize=F, main="In-sample ROC curve")
+
+
+# print out the area under the curve
+unlist(attributes(performance(pred, "auc"))$y.values)
+
+
+# --------------Evaluate the predictive ability on the validation set------------
+# make prediction on the validation dataset
+scores <- predict(reducedmodel.fit, newdata=wbca.test, type="response")
+pred <- prediction( scores, labels=wbca.test$Class )
+perf <- performance(pred, "tpr", "fpr")
+
+# overlay the line for the ROC curve
+plot(perf, colorize=T, main ="Validation set ROC Curve")
+
+
+# print out the area under the curve
+unlist(attributes(performance(pred, "auc"))$y.values)
+
+
+```
+
+The area under the curve for training set is 0.9976 and for validation set is 0.9976 which is close to 1.This shows that the predictive model has good ability of predicting for both training set and validation set. The area under the curve for the validation set is a good indicator that the model have good predictive ability.
